@@ -6,6 +6,7 @@ use App\Filament\Resources\SiteResource;
 use Filament\Resources\Pages\Page;
 use App\Models\Site;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Redis;
 
 class StatsSite extends Page
 {
@@ -24,6 +25,8 @@ class StatsSite extends Page
 
     public function mount($record): void
     {
+        // Redis::flushall(); // очистка Редиса
+
         $this->site = Site::findOrFail($record);
 
         $this->screenshotUrl = $this->site->screenshot_path
@@ -36,18 +39,20 @@ class StatsSite extends Page
 
         if ($diskPath !== null) [$this->imgW, $this->imgH] = getimagesize($diskPath);
 
-        // Данные для карты кликов
-        $this->heatmapData = $this->site->clicks()
-            ->select('x_coordinate','y_coordinate','viewport_width','viewport_height')
-            ->get()
-            ->toArray();
+        $siteKey  = $this->site->site_key;
+        $rawKey   = "raw:{$siteKey}";
+        $hourKey  = "hourly:{$siteKey}";
 
-        // Распределение по часам
-        $this->hourlyData = $this->site->clicks()
-            ->selectRaw('HOUR(clicked_at) as hour, COUNT(*) as clicks')
-            ->groupBy('hour')
-            ->orderBy('hour')
-            ->get()
-            ->toArray();
+        // 1) читаем последние raw-точки
+        $rawList = Redis::lrange($rawKey, 0, -1);
+        $this->heatmapData = array_map(fn($j) => json_decode($j, true), $rawList);
+
+        // 2) часовые счётчики
+        $hourly = Redis::hgetall($hourKey);
+        $this->hourlyData = array_map(
+            fn($hour, $cnt) => ['hour'=>intval($hour),'clicks'=>intval($cnt)],
+            array_keys($hourly),
+            array_values($hourly)
+        );
     }
 }
